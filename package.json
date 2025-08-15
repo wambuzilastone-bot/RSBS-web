@@ -1,0 +1,14 @@
+{
+  "name": "rsbs-footy",
+  "version": "1.0.0",
+  "description": "RSBS Football Fixtures App",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^3.4.1",
+    "dotenv": "^16.3.1"
+  }
+}
