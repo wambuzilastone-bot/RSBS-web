@@ -1,10 +1,11 @@
 doctype html
 html
   head
-    title RSBS Fixtures
-    link(rel="stylesheet", href="style.css")
+    title RSBS Football Fixtures
+    link(rel="stylesheet", href="/style.css")
   body
     h1 RSBS Football Fixtures
-    pre#fixtures
-      each f in fixtures
-        | #{f.home} vs #{f.away} | #{f.homeWDL} - #{f.awayWDL}\n
+    each f in fixtures
+      div.fixture
+        strong #{f.league}:
+        | #{f.home} vs #{f.away} | Home WDL: #{f.homeWDL} | Away WDL: #{f.awayWDL}
