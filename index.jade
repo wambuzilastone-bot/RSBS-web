@@ -1,5 +1,10 @@
-extends layout
-
-block content
-  h1= title
-  p Welcome to #{title}
+doctype html
+html
+  head
+    title RSBS Fixtures
+    link(rel="stylesheet", href="style.css")
+  body
+    h1 RSBS Football Fixtures
+    pre#fixtures
+      each f in fixtures
+        | #{f.home} vs #{f.away} | #{f.homeWDL} - #{f.awayWDL}\n
