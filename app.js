@@ -1,44 +1,61 @@
-require('dotenv').config();
-const express = require('express');
-const fetch = require('node-fetch');
-const path = require('path');
+import express from "express";
+import fetch from "node-fetch";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.set('views', path.join(__dirname, 'views'));
-app.set('view engine', 'jade');
+app.use(express.static("public"));
+app.set("view engine", "pug"); // Assuming you're using Pug/Jade templates
 
-app.use(express.static(path.join(__dirname, 'public')));
+// Replace with your league IDs from Football API
+const LEAGUE_IDS = [
+  71, 72, 78, 79, 81, 82, 83, 84, 85, 86, 87, 88
+];
 
-async function getFixtures() {
-  const today = new Date().toISOString().split("T")[0];
-  const nextWeek = new Date();
-  nextWeek.setDate(nextWeek.getDate() + 7);
-  const next7 = nextWeek.toISOString().split("T")[0];
+app.get("/", async (req, res) => {
+  try {
+    const today = new Date();
+    const sevenDaysLater = new Date();
+    sevenDaysLater.setDate(today.getDate() + 7);
 
-  const url = `https://v3.football.api-sports.io/fixtures?from=${today}&to=${next7}`;
+    const fixtures = [];
 
-  const response = await fetch(url, {
-    headers: { "x-apisports-key": process.env.FOOTBALL_API_KEY }
-  });
+    for (const league of LEAGUE_IDS) {
+      const url = `https://v3.football.api-sports.io/fixtures?league=${league}&season=2025&from=${today.toISOString().split("T")[0]}&to=${sevenDaysLater.toISOString().split("T")[0]}`;
+      
+      const response = await fetch(url, {
+        headers: { "x-apisports-key": process.env.FOOTBALL_API_KEY }
+      });
+      
+      const data = await response.json();
+      
+      data.response.forEach(f => {
+        // Example WDL ratio placeholder
+        const homeWDL = f.teams.home.name.length % 3 + "2" + "1"; // Replace with real calculation
+        const awayWDL = f.teams.away.name.length % 3 + "1" + "2"; // Replace with real calculation
 
-  const data = await response.json();
+        fixtures.push({
+          home: f.teams.home.name,
+          away: f.teams.away.name,
+          homeWDL,
+          awayWDL,
+          maxRatio: Math.max(parseInt(homeWDL[0]), parseInt(awayWDL[0]))
+        });
+      });
+    }
 
-  if (!data.response || data.response.length === 0) return [];
+    // Sort by maxRatio descending
+    fixtures.sort((a, b) => b.maxRatio - a.maxRatio);
 
-  return data.response.map(f => ({
-    home: f.teams.home.name,
-    away: f.teams.away.name,
-    homeWDL: `${f.teams.home.wins || 0}-${f.teams.home.draws || 0}-${f.teams.home.losses || 0}`,
-    awayWDL: `${f.teams.away.wins || 0}-${f.teams.away.draws || 0}-${f.teams.away.losses || 0}`,
-    date: f.fixture.date
-  }));
-}
+    res.render("index", { fixtures });
 
-app.get('/', async (req, res) => {
-  const fixtures = await getFixtures();
-  res.render('index', { fixtures });
+  } catch (err) {
+    console.error(err);
+    res.render("error", { error: err.message });
+  }
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`RSBS app running on port ${PORT}`));
