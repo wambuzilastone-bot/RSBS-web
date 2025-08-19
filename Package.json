@@ -1,0 +1,13 @@
+{
+  "name": "rsbs-web",
+  "version": "1.0.0",
+  "description": "RSBS web app with serverless API for fixtures",
+  "main": "index.html",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "vercel build",
+    "start": "vercel start"
+  },
+  "author": "W.L",
+  "license": "MIT"
+}
