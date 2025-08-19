@@ -1,45 +1,104 @@
-// api/fixtures.js
-import axios from 'axios';
-import cheerio from 'cheerio';
+import axios from "axios";
+import cheerio from "cheerio";
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== 'GET') {
-      return res.status(405).json({ error: 'Method Not Allowed' });
+    if (req.method !== "GET") {
+      return res.status(405).json({ error: "Method Not Allowed" });
     }
 
-    const country = (req.query.country || 'england').toLowerCase();
-    const league = (req.query.league || 'premier-league').toLowerCase();
+    // Query params: ?country=england&league=premier-league
+    const country = (req.query.country || "england").toLowerCase();
+    const league = (req.query.league || "premier-league").toLowerCase();
 
-    const url = `https://www.betexplorer.com/soccer/${country}/${league}/fixtures/`;
+    // --- Fetch fixtures ---
+    const fixturesUrl = `https://www.betexplorer.com/soccer/${country}/${league}/fixtures/`;
+    const tablesUrl = `https://www.betexplorer.com/soccer/${country}/${league}/tables/`;
 
-    const { data } = await axios.get(url, {
+    const http = axios.create({
       headers: {
-        'User-Agent': 'Mozilla/5.0',
-        Accept: 'text/html',
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       },
+      timeout: 20000,
     });
 
-    const $ = cheerio.load(data);
+    // Fetch fixtures HTML
+    const fxRes = await http.get(fixturesUrl);
+    const $fx = cheerio.load(fxRes.data);
     const fixtures = [];
 
-    $('table.table-main tr').each((_, tr) => {
-      const teams = [];
-      $(tr)
-        .find('a')
+    $fx("table.table-main tr").each((_, tr) => {
+      const aTexts = [];
+      $fx(tr)
+        .find("a")
         .each((_, a) => {
-          const t = $(a).text().trim();
-          if (t && /[A-Za-z]/.test(t)) teams.push(t);
+          const t = $fx(a).text().trim();
+          if (t && /[A-Za-z]/.test(t)) aTexts.push(t);
         });
-
-      if (teams.length >= 2) {
-        fixtures.push({ home: teams[0], away: teams[1] });
+      if (aTexts.length >= 2) {
+        fixtures.push({ home: aTexts[0], away: aTexts[1] });
       }
     });
 
-    return res.status(200).json({ league: `${country}/${league}`, count: fixtures.length, fixtures });
+    // Fetch standings HTML
+    const tableRes = await http.get(tablesUrl);
+    const $ = cheerio.load(tableRes.data);
+    const teamStats = {};
+
+    $("table.table-main").each((i, table) => {
+      $(table)
+        .find("tr")
+        .each((_, tr) => {
+          const tds = $(tr).find("td");
+          if (tds.length < 8) return;
+
+          const team = $(tds[1])
+            .text()
+            .trim()
+            .replace(/\s+FC$/i, "")
+            .replace(/\s+CF$/i, "");
+          if (!team) return;
+
+          const w = parseInt($(tds[3]).text() || "0", 10);
+          const d = parseInt($(tds[4]).text() || "0", 10);
+          const l = parseInt($(tds[5]).text() || "0", 10);
+          const [gfStr, gaStr] = ($(tds[6]).text() || "0:1").trim().split(":");
+          const gf = parseInt(gfStr, 10);
+          const ga = parseInt(gaStr, 10);
+
+          if (!teamStats[team]) teamStats[team] = {};
+          teamStats[team].total = { w, d, l, gf, ga };
+        });
+    });
+
+    // Build metrics
+    const buildMetrics = (home, away) => {
+      const lookup = {};
+      Object.keys(teamStats).forEach((t) => (lookup[t.toLowerCase()] = t));
+      const hKey = lookup[home.toLowerCase()];
+      const aKey = lookup[away.toLowerCase()];
+      if (!hKey || !aKey) return null;
+      const h = teamStats[hKey].total;
+      const a = teamStats[aKey].total;
+
+      const goalRatio = `${h.gf}/${Math.max(1, h.ga)} - ${a.gf}/${Math.max(1, a.ga)}`;
+      const wdlRatio = `${h.w}${h.d}${h.l} - ${a.w}${a.d}${a.l}`;
+      return { match: `${hKey} vs ${aKey}`, goal_ratio: goalRatio, wdl_ratio: wdlRatio };
+    };
+
+    const enriched = fixtures.map((f) => buildMetrics(f.home, f.away)).filter(Boolean);
+
+    res.status(200).json({
+      league: `${country}/${league}`,
+      count: enriched.length,
+      fixtures: enriched,
+    });
   } catch (error) {
     console.error(error);
-    return res.status(500).json({ error: 'Failed to fetch fixtures', details: error.message });
+    res.status(500).json({ error: "Failed to fetch", details: error.message });
   }
 }
