@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "chrome-aws-lambda": "^20.1.0",
+    "axios": "^1.7.0",
     "cheerio": "^1.0.0-rc.12"
   }
 }
