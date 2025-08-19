@@ -1,16 +1,15 @@
 {
-  "name": "rsbs-betexplorer",
+  "name": "rsbs-api",
   "version": "1.0.0",
-  "description": "RSBS football predictions API with custom metrics",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
+    "express": "^4.19.2",
     "axios": "^1.7.2",
     "cheerio": "^1.0.0-rc.12",
-    "express": "^4.19.2",
     "p-limit": "^5.0.0"
   }
 }
