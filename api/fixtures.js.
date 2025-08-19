@@ -1,45 +1,45 @@
 // api/fixtures.js
-import chromium from "chrome-aws-lambda";
-import * as cheerio from "cheerio";
+import axios from 'axios';
+import cheerio from 'cheerio';
 
 export default async function handler(req, res) {
   try {
-    // Launch headless browser
-    const browser = await chromium.puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath,
-      headless: true,
+    if (req.method !== 'GET') {
+      return res.status(405).json({ error: 'Method Not Allowed' });
+    }
+
+    const country = (req.query.country || 'england').toLowerCase();
+    const league = (req.query.league || 'premier-league').toLowerCase();
+
+    const url = `https://www.betexplorer.com/soccer/${country}/${league}/fixtures/`;
+
+    const { data } = await axios.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        Accept: 'text/html',
+      },
     });
 
-    const page = await browser.newPage();
-    const url = "https://www.betexplorer.com/football/";
+    const $ = cheerio.load(data);
+    const fixtures = [];
 
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-
-    const html = await page.content();
-    const $ = cheerio.load(html);
-
-    let fixtures = [];
-
-    $(".table-main tbody tr").each((i, el) => {
-      const home = $(el).find(".table-participant a").first().text().trim();
-      const away = $(el).find(".table-participant a").last().text().trim();
-      const time = $(el).find("td.kickoff").text().trim();
-
-      if (home && away) {
-        fixtures.push({
-          home,
-          away,
-          time,
+    $('table.table-main tr').each((_, tr) => {
+      const teams = [];
+      $(tr)
+        .find('a')
+        .each((_, a) => {
+          const t = $(a).text().trim();
+          if (t && /[A-Za-z]/.test(t)) teams.push(t);
         });
+
+      if (teams.length >= 2) {
+        fixtures.push({ home: teams[0], away: teams[1] });
       }
     });
 
-    await browser.close();
-    res.status(200).json({ fixtures });
+    return res.status(200).json({ league: `${country}/${league}`, count: fixtures.length, fixtures });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "Failed to fetch fixtures", details: error.message });
+    return res.status(500).json({ error: 'Failed to fetch fixtures', details: error.message });
   }
 }
