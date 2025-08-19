@@ -1,191 +1,147 @@
 import express from 'express';
 import axios from 'axios';
 import cheerio from 'cheerio';
-import pLimit from 'p-limit';
 import cors from 'cors';
+import pLimit from 'p-limit';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Enable CORS for all origins
 app.use(cors());
-
-// ---- CONFIG -----------------------------------------------------------------
-const DEFAULT_COUNTRY = 'england';
-const DEFAULT_LEAGUE  = 'premier-league';
-
-const leagueBase = (country, league) => `https://www.betexplorer.com/soccer/${country}/${league}/`;
-const fixturesUrl = (country, league) => `${leagueBase(country, league)}fixtures/`;
-const tablesUrlCandidates = (country, league) => [
-  `${leagueBase(country, league)}tables/`,
-  `${leagueBase(country, league)}standings/`,
-  `${leagueBase(country, league)}table/`
-];
+const PORT = process.env.PORT || 3000;
 
 const http = axios.create({
   headers: {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept-Language': 'en-US,en;q=0.9',
+    'User-Agent': 'Mozilla/5.0',
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
   },
   timeout: 20000
 });
 
+// ------------------ UTILS ------------------
 const safeInt = s => {
-  const n = parseInt(String(s || '').replace(/[^\d]/g, ''), 10);
-  return Number.isFinite(n) ? n : 0;
+  const n = parseInt((s||'').replace(/[^\d]/g,''),10);
+  return Number.isFinite(n)?n:0;
 };
+const compactWDL = ({w=0,d=0,l=0}) => `${w}${d}${l}`;
+const spacedWDL  = ({w=0,d=0,l=0}) => `${w} ${d} ${l}`;
 
-const compactWDL = ({ w = 0, d = 0, l = 0 }) => `${w}${d}${l}`;
+// ------------------ SCRAPER ------------------
+// 1️⃣ Get all countries
+app.get('/api/countries', async (req,res)=>{
+  try {
+    const url = 'https://www.betexplorer.com/soccer/';
+    const html = (await http.get(url)).data;
+    const $ = cheerio.load(html);
+    const countries = [];
+    $('div#content div.box a[href^="/soccer/"]').each((_,a)=>{
+      const link = $(a).attr('href');
+      const name = $(a).text().trim();
+      if(name && link) countries.push({name, slug: link.split('/')[2]});
+    });
+    res.json(countries);
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
 
-// ---- SCRAPERS ---------------------------------------------------------------
+// 2️⃣ Get all leagues for a country
+app.get('/api/leagues', async (req,res)=>{
+  try {
+    const country = req.query.country;
+    if(!country) return res.status(400).json({error:'country required'});
+    const url = `https://www.betexplorer.com/soccer/${country}/`;
+    const html = (await http.get(url)).data;
+    const $ = cheerio.load(html);
+    const leagues = [];
+    $('div.box a[href^="/soccer/'+country+'/"]').each((_,a)=>{
+      const link = $(a).attr('href');
+      const name = $(a).text().trim();
+      if(name && link) leagues.push({name, slug: link.split('/')[3]});
+    });
+    res.json(leagues);
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
 
-async function fetchFirstExisting(urls) {
-  for (const url of urls) {
-    try {
+// 3️⃣ Parse standings page
+async function fetchStandings(country, league){
+  const urls = [
+    `https://www.betexplorer.com/soccer/${country}/${league}/tables/`,
+    `https://www.betexplorer.com/soccer/${country}/${league}/standings/`
+  ];
+  let html;
+  for(const url of urls){
+    try{
       const res = await http.get(url);
-      if (res.status === 200 && res.data) return { url, html: res.data };
-    } catch {}
+      if(res.status===200){ html = res.data; break; }
+    } catch{}
   }
-  throw new Error('No standings URL responded successfully.');
-}
-
-function parseStandings(html) {
+  if(!html) return {};
   const $ = cheerio.load(html);
   const teamStats = {};
-
-  function parseTable($table, mode) {
-    $table.find('tr').each((_, tr) => {
-      const tds = $(tr).find('td');
-      if (tds.length < 8) return;
-
-      const team = $(tds[1]).text().trim().replace(/\s+FC$/i, '').replace(/\s+CF$/i, '');
-      if (!team) return;
-
-      const w = safeInt($(tds[3]).text());
-      const d = safeInt($(tds[4]).text());
-      const l = safeInt($(tds[5]).text());
-
-      const gfgaText = ($(tds[6]).text() || '').trim();
-      const [gfStr, gaStr] = gfgaText.split(':');
-      const gf = safeInt(gfStr);
-      const ga = safeInt(gaStr);
-
-      if (!teamStats[team]) teamStats[team] = {};
-      teamStats[team][mode] = { w, d, l, gf, ga };
-    });
-  }
-
-  let parsed = 0;
-
-  $('h2,h3,h4').each((_, el) => {
-    const title = $(el).text().toLowerCase();
-    const table = $(el).nextAll('table.table-main').first();
-    if (!table.length) return;
-
-    if (title.includes('overall') || title.includes('total') || title.includes('standings')) { parseTable(table, 'total'); parsed++; }
-    else if (title.includes('home')) { parseTable(table, 'home'); parsed++; }
-    else if (title.includes('away')) { parseTable(table, 'away'); parsed++; }
+  $('table.table-main').first().find('tr').each((_,tr)=>{
+    const tds = $(tr).find('td');
+    if(tds.length<8) return;
+    const team = $(tds[1]).text().trim().replace(/\s+FC$/i,'').replace(/\s+CF$/i,'');
+    if(!team) return;
+    const w = safeInt($(tds[3]).text());
+    const d = safeInt($(tds[4]).text());
+    const l = safeInt($(tds[5]).text());
+    const [gf,ga] = ($(tds[6]).text()||'0:0').split(':').map(s=>safeInt(s));
+    teamStats[team] = {
+      total: {w,d,l,gf,ga},
+      home: {w,d,l,gf,ga},   // simplified: reuse total for home/away
+      away: {w,d,l,gf,ga}
+    };
   });
-
-  if (parsed === 0) {
-    const tables = $('table.table-main');
-    if (tables.length >= 3) {
-      parseTable(tables.eq(0), 'total');
-      parseTable(tables.eq(1), 'home');
-      parseTable(tables.eq(2), 'away');
-    } else if (tables.length) {
-      parseTable(tables.eq(0), 'total');
-    }
-  }
-
   return teamStats;
 }
 
-function parseFixtures(html) {
+// 4️⃣ Parse fixtures page
+async function fetchFixtures(country, league){
+  const url = `https://www.betexplorer.com/soccer/${country}/${league}/fixtures/`;
+  const html = (await http.get(url)).data;
   const $ = cheerio.load(html);
   const fixtures = [];
-
-  $('table.table-main tr').each((_, tr) => {
+  $('table.table-main tr').each((_,tr)=>{
     const aTexts = [];
-    $(tr).find('a').each((_, a) => {
-      const t = $(a).text().trim();
-      if (t && /[A-Za-z]/.test(t)) aTexts.push(t);
-    });
-
-    if (aTexts.length >= 2) {
-      fixtures.push({
-        home: aTexts[0].replace(/\s+FC$/i, '').replace(/\s+CF$/i, ''),
-        away: aTexts[1].replace(/\s+FC$/i, '').replace(/\s+CF$/i, '')
-      });
+    $(tr).find('a').each((_,a)=>{ aTexts.push($(a).text().trim()); });
+    if(aTexts.length>=2){
+      const home = aTexts[0].replace(/\s+FC$/i,'').replace(/\s+CF$/i,'');
+      const away = aTexts[1].replace(/\s+FC$/i,'').replace(/\s+CF$/i,'');
+      fixtures.push({home, away});
     }
   });
-
-  return fixtures.filter(f => f.home && f.away && f.home !== f.away);
+  return fixtures.filter(f=>f.home && f.away && f.home!==f.away);
 }
 
-// ---- METRICS ----------------------------------------------------------------
-
-function buildMetricsForFixture(home, away, stats) {
-  const keyFor = s => s.toLowerCase().replace(/\s+fc$|\s+cf$/gi, '').replace(/\s+/g, ' ').trim();
-  const lookup = {};
-  Object.keys(stats).forEach(t => lookup[keyFor(t)] = t);
-
-  const hKey = lookup[keyFor(home)];
-  const aKey = lookup[keyFor(away)];
-  if (!hKey || !aKey) return null;
-
-  const h = stats[hKey] || {};
-  const a = stats[aKey] || {};
-
-  const totalH = h.total || { w: 0, d: 0, l: 0, gf: 0, ga: 0 };
-  const totalA = a.total || { w: 0, d: 0, l: 0, gf: 0, ga: 0 };
-  const homeH  = h.home  || { w: 0, d: 0, l: 0, gf: 0, ga: 0 };
-  const awayA  = a.away  || { w: 0, d: 0, l: 0, gf: 0, ga: 0 };
-
-  const goalRatio = `${totalH.gf}/${Math.max(1,totalH.ga)} - ${totalA.gf}/${Math.max(1,totalA.ga)}`;
-  const wdlRatio = `${compactWDL(totalH)} - ${compactWDL(totalA)}`;
-  const haRecord = `${compactWDL(homeH)} - ${compactWDL(awayA)}`;
+// ------------------ RSBS METRICS ------------------
+function buildMetrics(home,away,stats){
+  const key = s=>s.toLowerCase().trim();
+  const lookup={};
+  Object.keys(stats).forEach(t=>lookup[key(t)]=t);
+  const hKey = lookup[key(home)], aKey = lookup[key(away)];
+  if(!hKey || !aKey) return null;
+  const h = stats[hKey], a = stats[aKey];
+  const totalH = h.total, totalA = a.total, homeH = h.home, awayA = a.away;
 
   return {
     match: `${hKey} vs ${aKey}`,
-    goal_ratio: goalRatio,
-    wdl_ratio: wdlRatio,
-    ha_record: haRecord
+    goal_ratio: `${totalH.gf}/${Math.max(1,totalH.ga)} - ${totalA.gf}/${Math.max(1,totalA.ga)}`,
+    wdl_ratio: `${compactWDL(totalH)} - ${compactWDL(totalA)}`,
+    ha_record: `${compactWDL(homeH)} - ${compactWDL(awayA)}`
   };
 }
 
-// ---- API ENDPOINT -----------------------------------------------------------
-
-app.get('/api/fixtures', async (req, res) => {
-  const country = (req.query.country || DEFAULT_COUNTRY).toLowerCase();
-  const league  = (req.query.league  || DEFAULT_LEAGUE).toLowerCase();
-
-  try {
-    const fxRes = await http.get(fixturesUrl(country, league));
-    const fixtures = parseFixtures(fxRes.data);
-
-    const stdRes = await fetchFirstExisting(tablesUrlCandidates(country, league));
-    const teamStats = parseStandings(stdRes.html);
-
+// ------------------ API: fixtures with RSBS ------------------
+app.get('/api/fixtures', async (req,res)=>{
+  try{
+    const country = req.query.country;
+    const league = req.query.league;
+    if(!country||!league) return res.status(400).json({error:'country & league required'});
+    const [fixtures,stats] = await Promise.all([fetchFixtures(country,league), fetchStandings(country,league)]);
     const limit = pLimit(8);
-    const enriched = (await Promise.all(
-      fixtures.map(f => limit(() => buildMetricsForFixture(f.home, f.away, teamStats)))
-    )).filter(Boolean);
-
-    res.json({
-      league: `${country}/${league}`,
-      count: enriched.length,
-      fixtures: enriched
-    });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Scrape failed', details: err.message });
-  }
+    const enriched = (await Promise.all(fixtures.map(f=>limit(()=>buildMetrics(f.home,f.away,stats))))).filter(Boolean);
+    res.json({league:`${country}/${league}`,count:enriched.length,fixtures:enriched});
+  }catch(e){ res.status(500).json({error:e.message}); }
 });
 
-// Health check
-app.get('/', (_, res) => res.send('RSBS BetExplorer metrics API is running'));
-
-app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+// ------------------ START ------------------
+app.get('/',(req,res)=>res.send('RSBS API running. Use /api/countries, /api/leagues?country=xxx, /api/fixtures?country=xxx&league=yyy'));
+app.listen(PORT,()=>console.log(`Server running on ${PORT}`));
